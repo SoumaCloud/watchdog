@@ -141,6 +141,40 @@ func endpointLinks(row dbgen.VehiclePositionEndpoint) itemLinks {
 	}
 }
 
+// loadEndpoints is the include loader for kindEndpoint. It returns the E07
+// representation of each endpoint in ids, using two queries: one for the
+// endpoints and one for their parent servers. Each endpoint's configured flag
+// is computed from its own server's configuration entry, matching exactly what
+// a direct GET on that endpoint would return.
+func (s *InvestigationService) loadEndpoints(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.ListVehiclePositionEndpointsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int64]bool{}
+	serverIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if !seen[row.ServerID] {
+			seen[row.ServerID] = true
+			serverIDs = append(serverIDs, row.ServerID)
+		}
+	}
+	servers, err := q.ListServersByIDs(ctx, serverIDs)
+	if err != nil {
+		return nil, err
+	}
+	configuredByServer := make(map[int64]map[string]bool, len(servers))
+	for _, srv := range servers {
+		configuredByServer[srv.ServerID] = configuredVehiclePositionURLs(s.Servers(), srv.NormalizedBaseUrl)
+	}
+	out := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		l := endpointLinks(row)
+		out[row.EndpointID] = endpointRepresentation(row, l, configuredByServer[row.ServerID])
+	}
+	return out, nil
+}
+
 // endpointRepresentation maps one row to the representation that E06 lists
 // and E07 returns.
 func endpointRepresentation(row dbgen.VehiclePositionEndpoint, l itemLinks, configured map[string]bool) vehiclePositionEndpoint {
